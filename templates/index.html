@@ -7,6 +7,20 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
+    <header>
+        <nav>
+            <div style="float: right;">
+                <!-- Display username at the top-right -->
+                {% if user %}
+                    <span>Welcome, {{ user }}!</span>
+                    <a href="{{ url_for('logout') }}">Logout</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}">Login</a>
+                {% endif %}
+            </div>
+        </nav>
+    </header>
+
     <div class="container">
         <h1>Task Manager - {{ section.capitalize() }}</h1>
 
@@ -45,28 +59,6 @@
             <a href="{{ url_for('home', section='thisWeek') }}">This Week</a> |
             <a href="{{ url_for('home', section='thisMonth') }}">This Month</a> |
             <a href="{{ url_for('home', section='other') }}">All Tasks</a>
-        </div>
-
-        <!-- Procrastination Messages (from QA_Agent) -->
-        {% if procrastination_messages %}
-        <div class="procrastination-alerts">
-            <h2>Ooh 😮:</h2>
-            <ul>
-                {% for message in procrastination_messages %}
-                <li>{{ message }}</li>
-                {% endfor %}
-            </ul>
-        </div>
-        {% endif %}
-
-        <!-- User Preferences -->
-        <div class="user-preferences">
-            <h2>User Profile</h2>
-            <form action="{{ url_for('update_preferences') }}" method="POST">
-                <label>Name: <input type="text" name="name" value="{{ user_preferences.name }}"></label>
-                <label>Email: <input type="email" name="email" value="{{ user_preferences.email }}"></label>
-                <button type="submit">Update Profile</button>
-            </form>
         </div>
 
         <!-- Button to Delete All Tasks -->

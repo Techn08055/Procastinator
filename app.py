@@ -1,17 +1,10 @@
-from flask import Flask, render_template, request, redirect, url_for,session
+from flask import Flask, render_template, flash, request, redirect, url_for,session
 from datetime import datetime, timedelta
 import time
 import random
 import logging
 from huggingface_hub import InferenceClient
 import os
-access_token = os.environ.get('HF_TOKEN')
-
-client = InferenceClient(
-    model = "NousResearch/Hermes-3-Llama-3.1-8B",
-    token = access_token,
-    timeout = 60.0,
-)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -24,6 +17,16 @@ user_preferences = {"name": "John Doe", "email": "john@gmail.com"}
 # Logging setup
 logging.basicConfig(filename='app.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
+
+access_token = os.environ.get('HF_TOKEN')
+if access_token is None:    
+    logging.info("Huggingface auth token not found")
+
+client = InferenceClient(
+    model = "NousResearch/Hermes-3-Llama-3.1-8B",
+    token = access_token,
+    timeout = 60.0,
+)
 
 # Generate a unique numeric ID
 def generate_numeric_id():
@@ -70,7 +73,6 @@ def check_deadlines():
     return upcoming_tasks
 
 # Function to alert user using LLM procrastination assistant
-# Function to alert user using LLM procrastination assistant
 def alert_user(upcoming_tasks):
     procrastination_messages = []
 
@@ -88,36 +90,85 @@ def alert_user(upcoming_tasks):
 
             You have a task '{task['text']}' due on {task['date']}"""
             
-            agent_reply = client.chat_completion(
-                messages=[{"role": "user", "content": task_description}],
-                max_tokens=200,
-                stream=False,
-            )
-            
-            procrastination_message = agent_reply.choices[0].message.content
+            try:
+                agent_reply = client.chat_completion(
+                    messages=[{"role": "user", "content": task_description}],
+                    max_tokens=200,
+                    stream=False,
+                )
+                procrastination_message = agent_reply.choices[0].message.content
+            except:
+                logging.info("Failed to connect to chat client")
+                procrastination_message = "Unable to retrieve reply from chat agent"
             procrastination_messages.append(procrastination_message)
             logging.info(f"Generated procrastination message for task '{task['text']}': {procrastination_message}")
     
     return procrastination_messages
 
-
 # Home route, default to "My Day"
 @app.route('/')
 def home():
+    if 'user' not in session:
+        return redirect(url_for('login'))
+
     section = request.args.get('section', 'myDay')
     filtered_tasks = filter_tasks(section)
     # Check for upcoming deadlines and get procrastination messages
     upcoming_tasks = check_deadlines()
-    if upcoming_tasks:
-        procrastination_messages = alert_user(upcoming_tasks)
-    else:
-        procrastination_messages = None
+    procrastination_messages = None
 
+    # Check for upcoming tasks and randomly pop up a distraction
+    if upcoming_tasks:
+        if random.randint(1, 2) == 1:  # 20% chance of distraction
+            return redirect(url_for('procrastination'))
     user = session.get('user', 'guest')
 
     logging.info(f"Rendering home page for section: {section}, tasks count: {len(filtered_tasks)}")
     return render_template('index.html', tasks=filtered_tasks, section=section,
-                           user_preferences=user, procrastination_messages=procrastination_messages)
+                           user=user)
+
+
+# Route to display procrastination messages as a distraction
+@app.route('/procrastination')
+def procrastination():
+    if 'user' not in session:
+        return redirect(url_for('login'))
+
+    user = session.get('user', 'guest')
+    upcoming_tasks = check_deadlines()
+
+    if upcoming_tasks:
+        procrastination_messages = alert_user(upcoming_tasks)
+        random_message = random.choice(procrastination_messages)
+    else:
+        random_message = "No tasks due soon! Relax a bit."
+
+    return render_template('procrastination.html', message=random_message)
+
+# Route to handle login
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('name')
+        email = request.form.get('email')
+
+        if username and email:
+            session['user'] = username
+            session['email'] = email
+            logging.info(f"User logged in: {username}")
+            return redirect(url_for('home'))
+        else:
+            flash("Please provide a valid name and email.")
+            return redirect(url_for('login'))
+
+    return render_template('login.html')
+
+# Route to handle logout
+@app.route('/logout')
+def logout():
+    session.clear()
+    logging.info("User logged out.")
+    return redirect(url_for('login'))
 
 # Route to add a new task
 @app.route('/add_task', methods=['POST'])
@@ -170,15 +221,8 @@ def delete_all_tasks():
     logging.info(f"All tasks deleted for user {user}.")
     return redirect(url_for('home'))
 
-# Route to update user preferences
-@app.route('/update_preferences', methods=['POST'])
-def update_preferences():
-    session['user'] = request.form.get('name', 'guest')
-    user_email = request.form.get('email', 'guest@gmail.com')
-    logging.info(f"Updated user preferences: {session['user']}, {user_email}")
+# Route to update user preference
 
-    return redirect(url_for('home'))
-
-# if __name__ == '__main__':
-#     logging.info("Starting Flask app...")
-#     app.run(debug=True)
+if __name__ == '__main__':
+    logging.info("Starting Flask app...")
+    app.run(debug=True)
