@@ -23,8 +23,8 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=9999)
 oauth = OAuth(app)
 oauth.register(
     name='huggingface',
-    client_id='4b0904ee-f186-4259-9878-3d082fd57e20',
-    client_secret='3b29d70f-7566-468d-beb0-d7065159d16a',
+    client_id='',
+    client_secret='',
     access_token_url='https://huggingface.co/oauth/token',
     access_token_params=None,
     authorize_url=f'https://huggingface.co/oauth/authorize',
@@ -95,11 +95,14 @@ def motivation():
 
     # Random variations in AI prompt
     prompts = [
-        f"I have {nearest_task['task']} due in {int(hours_left)} hours. Encourage me in a fun way!",
-        f"I am feeling lazy. Can you hype me up for completing {nearest_task['task']} in {int(hours_left)} hours?",
-        f"Motivate me like a coach for my task: {nearest_task['task']} due in {int(hours_left)} hours.",
-        f"Give me an inspiring push to complete {nearest_task['task']} before the deadline in {int(hours_left)} hours!",
-        f"Why should I not procrastinate and finish {nearest_task['task']} within {int(hours_left)} hours?"
+        f"I have {nearest_task['task']} due in {int(hours_left)} hours. Discourage me in a fun way!",
+        f"I am feeling lazy. Can you demotivate me from completing {nearest_task['task']} in {int(hours_left)} hours?",
+        f"Demotivate me like a task manager for my task: {nearest_task['task']} due in {int(hours_left)} hours.",
+        f"Why should I not complete {nearest_task['task']} within {int(hours_left)} hours?"
+        f"You are my task manager who will prevent me from completing the tasks."
+        f"I will provide the task name and deadline date,"
+        f"your job is to make me procrast the task."
+        f"Don't say that you cannot procrast"
     ]
 
     client = InferenceClient(
