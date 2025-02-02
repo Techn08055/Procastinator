@@ -1,228 +1,150 @@
-from flask import Flask, render_template, flash, request, redirect, url_for,session
-from datetime import datetime, timedelta
-import time
-import random
-import logging
+from flask import Flask, redirect, url_for, session, render_template, request, jsonify
+from datetime import timedelta, datetime
+from authlib.integrations.flask_client import OAuth
+from functools import wraps
 from huggingface_hub import InferenceClient
+import random
+import time
 import os
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Initialize Flask app
+
+# App config
 app = Flask(__name__)
-app.secret_key = 'secret_key'
+# Session config
+app.secret_key = "secret"
+app.config['SESSION_COOKIE_NAME'] = 'huggingface-login-session'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=9999)
 
-# Temporary storage (equivalent to localStorage)
-user_tasks = {}
-user_preferences = {"name": "John Doe", "email": "john@gmail.com"}
 
-# Logging setup
-logging.basicConfig(filename='app.log', level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
-access_token = os.environ.get('HF_TOKEN')
-if access_token is None:    
-    logging.info("Huggingface auth token not found")
-
-client = InferenceClient(
-    model = "NousResearch/Hermes-3-Llama-3.1-8B",
-    token = access_token,
-    timeout = 60.0,
+# oauth config
+oauth = OAuth(app)
+oauth.register(
+    name='huggingface',
+    client_id='4b0904ee-f186-4259-9878-3d082fd57e20',
+    client_secret='3b29d70f-7566-468d-beb0-d7065159d16a',
+    access_token_url='https://huggingface.co/oauth/token',
+    access_token_params=None,
+    authorize_url=f'https://huggingface.co/oauth/authorize',
+    client_kwargs={'scope': 'inference-api'},
+    server_metadata_url='https://huggingface.co/.well-known/openid-configuration'
 )
 
-# Generate a unique numeric ID
-def generate_numeric_id():
-    return int(datetime.now().timestamp() * 1000)
 
-# Filter tasks by section (e.g., My Day, This Week, etc.)
-def filter_tasks(section):
-    today = datetime.now().date()
-    start_of_week = today - timedelta(days=today.weekday())
-    end_of_week = start_of_week + timedelta(days=6)
-    start_of_month = today.replace(day=1)
-    end_of_month = (start_of_month + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+# check for session
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        user = session.get('user_token')
+        if  not user or 'access_token' not in user:
+            logger.info("No valid user token, redirecting to login.")
+            return redirect(url_for("login"))
+        if int(time.time()) > user.get("expires_at",0) - 5:
+            logger.info("Token expired, forcing re-login.")
+            session.pop("user_token", None)
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated_function
 
-    filtered_tasks = []
-    user = session.get('user', 'guest')
-    tasks = user_tasks.get(user, {})
 
-    for task in tasks.values():
-        task_date = datetime.strptime(task['date'], '%Y-%m-%d').date()
-
-        if section == "myDay" and task_date == today:
-            filtered_tasks.append(task)
-        elif section == "thisWeek" and start_of_week <= task_date <= end_of_week:
-            filtered_tasks.append(task)
-        elif section == "thisMonth" and start_of_month <= task_date <= end_of_month:
-            filtered_tasks.append(task)
-        elif section == "other":
-            filtered_tasks.append(task)
-
-    return filtered_tasks
-
-# Check for tasks approaching deadlines
-def check_deadlines():
-    today = datetime.now().date()
-    upcoming_tasks = []
-    user = session.get('user', 'guest')
-    tasks = user_tasks.get(user, {})
-
-    for task in tasks.values():
-        task_date = datetime.strptime(task['date'], '%Y-%m-%d').date()
-        if today <= task_date <= today + timedelta(days=2):  # Within 2 days
-            upcoming_tasks.append(task)
-
-    return upcoming_tasks
-
-# Function to alert user using LLM procrastination assistant
-def alert_user(upcoming_tasks):
-    procrastination_messages = []
-
-    # Only alert if there are upcoming tasks
-    if upcoming_tasks:
-        for task in upcoming_tasks:
-            task_description = f"""
-            You are my task manager who will prevent me from completing the tasks.
-            I will provide the task name and deadline date,
-            your job is to make me procrast the task.
-            don't say that you cannot procrast.
-
-            example reply:
-                you still have a few minutes for completing {task['text']}, now relax and watch a video.
-
-            You have a task '{task['text']}' due on {task['date']}"""
-            
-            try:
-                agent_reply = client.chat_completion(
-                    messages=[{"role": "user", "content": task_description}],
-                    max_tokens=200,
-                    stream=False,
-                )
-                procrastination_message = agent_reply.choices[0].message.content
-            except:
-                logging.info("Failed to connect to chat client")
-                procrastination_message = "Unable to retrieve reply from chat agent"
-            procrastination_messages.append(procrastination_message)
-            logging.info(f"Generated procrastination message for task '{task['text']}': {procrastination_message}")
-    
-    return procrastination_messages
-
-# Home route, default to "My Day"
 @app.route('/')
+@login_required
 def home():
-    if 'user' not in session:
-        return redirect(url_for('login'))
+    tasks = session.get('tasks', [])
+    return render_template('index.html', tasks=tasks)
 
-    section = request.args.get('section', 'myDay')
-    filtered_tasks = filter_tasks(section)
-    # Check for upcoming deadlines and get procrastination messages
-    upcoming_tasks = check_deadlines()
-    procrastination_messages = None
+@app.route('/add_task', methods=['POST'])
+@login_required
+def add_task():
+    task_name = request.form.get('task')
+    deadline = request.form.get('deadline')
 
-    # Check for upcoming tasks and randomly pop up a distraction
-    if upcoming_tasks:
-        if random.randint(1, 2) == 1:  # 20% chance of distraction
-            return redirect(url_for('procrastination'))
-    user = session.get('user', 'guest')
+    if not task_name or not deadline:
+        return jsonify({"error": "Task and deadline required"}), 400
 
-    logging.info(f"Rendering home page for section: {section}, tasks count: {len(filtered_tasks)}")
-    return render_template('index.html', tasks=filtered_tasks, section=section,
-                           user=user)
+    tasks = session.get('tasks', [])
+    tasks.append({'task': task_name, 'deadline': deadline})
+    session['tasks'] = tasks
 
+    return redirect(url_for('home'))
 
-# Route to display procrastination messages as a distraction
-@app.route('/procrastination')
-def procrastination():
-    if 'user' not in session:
-        return redirect(url_for('login'))
+@app.route('/delete_task/<int:index>')
+@login_required
+def delete_task(index):
+    tasks = session.get('tasks', [])
+    if 0 <= index < len(tasks):
+        del tasks[index]
+        session['tasks'] = tasks
+    return redirect(url_for('home'))
 
-    user = session.get('user', 'guest')
-    upcoming_tasks = check_deadlines()
+@app.route('/motivation')
+@login_required
+def motivation():
+    tasks = session.get('tasks', [])
+    if not tasks:
+        return jsonify({"message": "No tasks to motivate you for!"})
+    # Find the nearest upcoming task
+    now = datetime.now()
+    nearest_task = min(tasks, key=lambda t: abs((datetime.strptime(t['deadline'], "%Y-%m-%d %H:%M") - now).total_seconds()))
 
-    if upcoming_tasks:
-        procrastination_messages = alert_user(upcoming_tasks)
-        random_message = random.choice(procrastination_messages)
-    else:
-        random_message = "No tasks due soon! Relax a bit."
+    deadline = datetime.strptime(nearest_task['deadline'], "%Y-%m-%d %H:%M")
+    time_left = deadline - now
+    hours_left = time_left.total_seconds() / 3600
 
-    return render_template('procrastination.html', message=random_message)
+    # Random variations in AI prompt
+    prompts = [
+        f"I have {nearest_task['task']} due in {int(hours_left)} hours. Encourage me in a fun way!",
+        f"I am feeling lazy. Can you hype me up for completing {nearest_task['task']} in {int(hours_left)} hours?",
+        f"Motivate me like a coach for my task: {nearest_task['task']} due in {int(hours_left)} hours.",
+        f"Give me an inspiring push to complete {nearest_task['task']} before the deadline in {int(hours_left)} hours!",
+        f"Why should I not procrastinate and finish {nearest_task['task']} within {int(hours_left)} hours?"
+    ]
 
-# Route to handle login
-@app.route('/login', methods=['GET', 'POST'])
+    client = InferenceClient(
+        model="NousResearch/Hermes-3-Llama-3.1-8B",
+        token=session['user_token']['access_token'],
+        timeout=60.0,
+    )
+
+    response = client.chat_completion(
+        messages=[{"role": "user", "content": random.choice(prompts)}],
+        max_tokens=200,
+        stream=False,
+    )
+
+    motivation_message = response.choices[0].message.content
+
+    return jsonify({"task": nearest_task['task'], "motivation": motivation_message})
+
+@app.route('/login')
 def login():
-    if request.method == 'POST':
-        username = request.form.get('name')
-        email = request.form.get('email')
-
-        if username and email:
-            session['user'] = username
-            session['email'] = email
-            logging.info(f"User logged in: {username}")
-            return redirect(url_for('home'))
-        else:
-            flash("Please provide a valid name and email.")
-            return redirect(url_for('login'))
-
     return render_template('login.html')
 
-# Route to handle logout
+@app.route('/confirm_login')
+def confirm_login():
+    redirect_uri = url_for('authorize', _external=True)
+    return oauth.huggingface.authorize_redirect(redirect_uri, prompt="login")
+
+
+@app.route('/authorize')
+def authorize():
+    token = oauth.huggingface.authorize_access_token()  # Access token from hugginface (needed to get user info)
+    # user = oauth.huggingface.userinfo()  # uses openid endpoint to fetch user info
+    session['user_token'] = token
+    session.permanent = True  # make the session permanant so it keeps existing after broweser gets closed
+    logger.info(f"User logged in with token: {token}")
+    return redirect('/')
+
+
 @app.route('/logout')
 def logout():
+    for key in list(session.keys()):
+        session.pop(key)
     session.clear()
-    logging.info("User logged out.")
-    return redirect(url_for('login'))
+    return redirect('/')
 
-# Route to add a new task
-@app.route('/add_task', methods=['POST'])
-def add_task():
-    task_text = request.form.get('todo')
-    due_date = request.form.get('duedate')
-
-    if task_text and due_date:
-        task_id = generate_numeric_id()
-        user = session.get('user', 'guest')
-
-        if user not in user_tasks:
-            user_tasks[user] = {}
-        user_tasks[user][task_id] = {
-            "id": task_id,
-            "text": task_text,
-            "date": due_date,
-            "completed": False
-        }
-        logging.info(f"Task added: {task_text}, due date: {due_date} for user: {user}")
-
-    return redirect(url_for('home'))
-
-# Route to mark a task as complete/incomplete
-@app.route('/toggle_task/<int:task_id>', methods=['POST'])
-def toggle_task(task_id):
-    user = session.get('user', 'guest')
-    task = user_tasks.get(user, {}).get(task_id)
-    if task:
-        task['completed'] = not task['completed']
-        logging.info(f"Toggled task '{task['text']}' for user '{user}' to {'completed' if task['completed'] else 'incomplete'}")
-
-    return redirect(url_for('home'))
-
-# Route to delete a task
-@app.route('/delete_task/<int:task_id>', methods=['POST'])
-def delete_task(task_id):
-    user = session.get('user', 'guest')
-    if task_id in user_tasks.get(user, {}):
-        logging.info(f"Task deleted: {user_tasks[user][task_id]['text']} for user {user}")
-        user_tasks[user].pop(task_id, None)
-
-    return redirect(url_for('home'))
-
-# Route to delete all tasks
-@app.route('/delete_all_tasks', methods=['POST'])
-def delete_all_tasks():
-    user = session.get('user', 'guest')
-    user_tasks[user] = {}
-    logging.info(f"All tasks deleted for user {user}.")
-    return redirect(url_for('home'))
-
-# Route to update user preference
 
 if __name__ == '__main__':
-    logging.info("Starting Flask app...")
-    app.run(debug=True)
+    app.run()
