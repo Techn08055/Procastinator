@@ -89,7 +89,7 @@ def motivation():
     now = datetime.now()
     nearest_task = min(tasks, key=lambda t: abs((datetime.strptime(t['deadline'], "%Y-%m-%d %H:%M") - now).total_seconds()))
 
-    deadline = datetime.strptime(nearest_task['deadline'], "%Y-%m-%d %H:%M")
+    deadline = datetime.strptime(nearest_task['deadline'], "%Y-%m-%dT%H:%M")
     time_left = deadline - now
     hours_left = time_left.total_seconds() / 3600
 
