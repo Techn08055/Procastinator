@@ -1,30 +1,33 @@
+import random
+import time
+import os
+import logging
 from flask import Flask, redirect, url_for, session, render_template, request, jsonify
 from datetime import timedelta, datetime
 from authlib.integrations.flask_client import OAuth
 from functools import wraps
 from huggingface_hub import InferenceClient
-import random
-import time
-import os
-import logging
+from dotenv import load_dotenv  # Import dotenv
+
+# Load environment variables
+load_dotenv()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 # App config
 app = Flask(__name__)
-# Session config
-app.secret_key = "secret"
+app.secret_key = os.getenv("SECRET_KEY")  # Load secret key from .env
 app.config['SESSION_COOKIE_NAME'] = 'huggingface-login-session'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=9999)
 
-
-# oauth config
+# OAuth configuration
 oauth = OAuth(app)
 oauth.register(
     name='huggingface',
-    client_id='',
-    client_secret='',
+    client_id=os.getenv("HF_CLIENT_ID"),  # Load from .env
+    client_secret=os.getenv("HF_CLIENT_SECRET"),  # Load from .env
     access_token_url='https://huggingface.co/oauth/token',
     access_token_params=None,
     authorize_url=f'https://huggingface.co/oauth/authorize',
@@ -89,7 +92,7 @@ def motivation():
     now = datetime.now()
     nearest_task = min(tasks, key=lambda t: abs((datetime.strptime(t['deadline'], "%Y-%m-%d %H:%M") - now).total_seconds()))
 
-    deadline = datetime.strptime(nearest_task['deadline'], "%Y-%m-%d %H:%M")
+    deadline = datetime.strptime(nearest_task['deadline'], "%Y-%m-%dT%H:%M")
     time_left = deadline - now
     hours_left = time_left.total_seconds() / 3600
 
